@@ -11,6 +11,10 @@ import {
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Haptics from 'expo-haptics';
+
+// NOTE: Notifications removed to prevent Expo Go SDK 53 crash on Android.
+// To use notifications, you must create a "Development Build".
 
 /* ---------- Types ---------- */
 
@@ -22,20 +26,22 @@ type Deadline = {
 };
 
 const STORAGE_KEY = 'deadlines';
+const HISTORY_KEY = 'deadlines_history';
 
 /* ---------- Screen ---------- */
 
 export default function DeadlinesScreen() {
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
+  const [history, setHistory] = useState<Deadline[]>([]);
+  
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Deadline | null>(null);
-
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
+  // Form State
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('');
   const [dueDate, setDueDate] = useState<Date | null>(null);
-
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
@@ -44,7 +50,9 @@ export default function DeadlinesScreen() {
   useEffect(() => {
     (async () => {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
+      const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
       if (saved) setDeadlines(JSON.parse(saved));
+      if (savedHistory) setHistory(JSON.parse(savedHistory));
     })();
   }, []);
 
@@ -52,9 +60,14 @@ export default function DeadlinesScreen() {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(deadlines));
   }, [deadlines]);
 
+  useEffect(() => {
+    AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }, [history]);
+
   /* ---------- Actions ---------- */
 
   const openAdd = () => {
+    Haptics.selectionAsync(); // Haptic feedback
     setEditing(null);
     setTitle('');
     setSubject('');
@@ -63,6 +76,7 @@ export default function DeadlinesScreen() {
   };
 
   const openEdit = (d: Deadline) => {
+    Haptics.selectionAsync();
     setEditing(d);
     setTitle(d.title);
     setSubject(d.subject ?? '');
@@ -71,32 +85,26 @@ export default function DeadlinesScreen() {
     setShowForm(true);
   };
 
-  const saveDeadline = () => {
-    if (!title.trim() || !dueDate) return;
+  const saveDeadline = async () => {
+    if (!title.trim() || !dueDate) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    // Success Haptic
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    const newItem = {
+      id: editing ? editing.id : Date.now().toString(),
+      title,
+      subject: subject.trim() || undefined,
+      dueAt: dueDate.getTime(),
+    };
 
     if (editing) {
-      setDeadlines(prev =>
-        prev.map(d =>
-          d.id === editing.id
-            ? {
-                ...d,
-                title,
-                subject: subject.trim() || undefined,
-                dueAt: dueDate.getTime(),
-              }
-            : d
-        )
-      );
+      setDeadlines(prev => prev.map(d => (d.id === editing.id ? newItem : d)));
     } else {
-      setDeadlines(prev => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          title,
-          subject: subject.trim() || undefined,
-          dueAt: dueDate.getTime(),
-        },
-      ]);
+      setDeadlines(prev => [...prev, newItem]);
     }
 
     setShowForm(false);
@@ -104,20 +112,35 @@ export default function DeadlinesScreen() {
   };
 
   const deleteDeadline = (id: string) => {
+    // Impact Haptic (heavier feel for delete)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
     Alert.alert('Delete deadline?', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: () =>
-          setDeadlines(prev => prev.filter(d => d.id !== id)),
+        onPress: () => {
+          setDeadlines(prev => prev.filter(d => d.id !== id));
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        },
       },
     ]);
     setMenuFor(null);
   };
 
-  const completeDeadline = (id: string) => {
-    setDeadlines(prev => prev.filter(d => d.id !== id));
+  const completeDeadline = (item: Deadline) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    
+    // 1. Remove from active list
+    setDeadlines(prev => prev.filter(d => d.id !== item.id));
+
+    // 2. Add to history (keep top 5)
+    setHistory(prev => {
+      const updated = [item, ...prev];
+      return updated.slice(0, 5);
+    });
+
     setMenuFor(null);
   };
 
@@ -128,6 +151,8 @@ export default function DeadlinesScreen() {
       setShowPicker(false);
       return;
     }
+
+    Haptics.selectionAsync();
 
     if (pickerMode === 'date') {
       const base = dueDate ?? new Date();
@@ -158,120 +183,86 @@ export default function DeadlinesScreen() {
   endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
 
   const today = deadlines.filter(
-    d => d.dueAt >= startOfToday.getTime() &&
-         d.dueAt < startOfTomorrow.getTime()
+    d => d.dueAt >= startOfToday.getTime() && d.dueAt < startOfTomorrow.getTime()
   );
-
   const tomorrow = deadlines.filter(
-    d => d.dueAt >= startOfTomorrow.getTime() &&
-         d.dueAt < endOfTomorrow.getTime()
+    d => d.dueAt >= startOfTomorrow.getTime() && d.dueAt < endOfTomorrow.getTime()
   );
-
-  const upcoming = deadlines.filter(
-    d => d.dueAt >= endOfTomorrow.getTime()
-  );
+  const upcoming = deadlines.filter(d => d.dueAt >= endOfTomorrow.getTime());
 
   /* ---------- UI ---------- */
 
-  const DeadlineCard = ({ item }: { item: Deadline }) => (
+  const DeadlineCard = ({ item, isHistory }: { item: Deadline, isHistory?: boolean }) => (
     <View
       key={item.id}
       style={{
         borderWidth: 1,
-        borderColor: '#ddd',
+        borderColor: isHistory ? '#eee' : '#ddd',
+        backgroundColor: isHistory ? '#f9f9f9' : '#fff',
         padding: 12,
         borderRadius: 8,
         marginBottom: 8,
+        opacity: isHistory ? 0.6 : 1,
       }}
     >
-      <View
-        style={{
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Text style={{ fontSize: 16, fontWeight: '600' }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text style={{ 
+          fontSize: 16, 
+          fontWeight: '600', 
+          textDecorationLine: isHistory ? 'line-through' : 'none' 
+        }}>
           {item.title}
         </Text>
 
-        <Pressable onPress={() => setMenuFor(item.id)}>
-          <Text style={{ fontSize: 22 }}>⋮</Text>
-        </Pressable>
+        {!isHistory && (
+          <Pressable onPress={() => {
+             Haptics.selectionAsync();
+             setMenuFor(item.id);
+          }}>
+            <Text style={{ fontSize: 22, paddingHorizontal: 4 }}>⋮</Text>
+          </Pressable>
+        )}
       </View>
 
-      {item.subject && (
-        <Text style={{ color: '#555' }}>{item.subject}</Text>
-      )}
+      {item.subject && <Text style={{ color: '#555' }}>{item.subject}</Text>}
 
-      <Text style={{ color: '#666', marginTop: 4 }}>
-        Due {new Date(item.dueAt).toLocaleString()}
+      <Text style={{ color: '#666', marginTop: 4, fontSize: 12 }}>
+        {isHistory ? 'Completed' : `Due ${new Date(item.dueAt).toLocaleString()}`}
       </Text>
 
-      {/* 3-dot menu */}
-      <Modal
-        transparent
-        visible={menuFor === item.id}
-        animationType="fade"
-      >
-        <Pressable
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(0,0,0,0.3)',
-            justifyContent: 'center',
-            padding: 32,
-          }}
-          onPress={() => setMenuFor(null)}
-        >
-          <View
-            style={{
-              backgroundColor: '#fff',
-              borderRadius: 8,
-              padding: 12,
-            }}
+      {/* 3-dot menu (Only for active items) */}
+      {!isHistory && (
+        <Modal transparent visible={menuFor === item.id} animationType="fade">
+          <Pressable
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', padding: 32 }}
+            onPress={() => setMenuFor(null)}
           >
-            <MenuItem label="✏️ Edit" onPress={() => openEdit(item)} />
-            <MenuItem
-              label="✅ Mark as completed"
-              onPress={() => completeDeadline(item.id)}
-            />
-            <MenuItem
-              label="🗑 Delete"
-              danger
-              onPress={() => deleteDeadline(item.id)}
-            />
-          </View>
-        </Pressable>
-      </Modal>
+            <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 12 }}>
+              <MenuItem label="✏️ Edit" onPress={() => openEdit(item)} />
+              <MenuItem label="✅ Mark as completed" onPress={() => completeDeadline(item)} />
+              <MenuItem label="🗑 Delete" danger onPress={() => deleteDeadline(item.id)} />
+            </View>
+          </Pressable>
+        </Modal>
+      )}
     </View>
   );
 
   const Section = ({ title }: { title: string }) => (
-    <Text
-      style={{
-        fontSize: 18,
-        fontWeight: '700',
-        marginTop: 16,
-        marginBottom: 6,
-      }}
-    >
+    <Text style={{ fontSize: 18, fontWeight: '700', marginTop: 16, marginBottom: 6 }}>
       {title}
     </Text>
   );
 
   return (
-    <View style={{ flex: 1, padding: 16, backgroundColor: '#fff' }}>
-      <Text style={{ fontSize: 28, fontWeight: '700', marginBottom: 12 }}>
-        Deadlines
-      </Text>
+    <View style={{ flex: 1, padding: 16, paddingTop: 60, backgroundColor: '#fff' }}>
+      <Text style={{ fontSize: 28, fontWeight: '700', marginBottom: 12 }}>Deadlines</Text>
 
       <Pressable onPress={openAdd} style={addBtn}>
-        <Text style={{ textAlign: 'center', fontWeight: '600' }}>
-          + Add Deadline
-        </Text>
+        <Text style={{ textAlign: 'center', fontWeight: '600' }}>+ Add Deadline</Text>
       </Pressable>
 
-      <ScrollView>
+      <ScrollView showsVerticalScrollIndicator={false}>
         {today.length > 0 && (
           <>
             <Section title="🔥 Today" />
@@ -292,53 +283,53 @@ export default function DeadlinesScreen() {
             {upcoming.map(d => <DeadlineCard key={d.id} item={d} />)}
           </>
         )}
+        
+        {/* History Section */}
+        {history.length > 0 && (
+          <>
+            <Section title="📜 History (Last 5)" />
+            {history.map(d => <DeadlineCard key={d.id} item={d} isHistory />)}
+          </>
+        )}
+
+        <View style={{ height: 40 }} />
       </ScrollView>
 
       {/* Add / Edit Modal */}
       <Modal visible={showForm} animationType="slide">
-        <View style={{ flex: 1, padding: 16 }}>
-          <Text style={{ fontSize: 22, fontWeight: '700' }}>
-            {editing ? 'Edit Deadline' : 'Add Deadline'}
-          </Text>
-
+        <View style={{ flex: 1, padding: 16, paddingTop: 60 }}>
+          <Text style={{ fontSize: 22, fontWeight: '700' }}>{editing ? 'Edit Deadline' : 'Add Deadline'}</Text>
+          
           <TextInput
             placeholder="Title"
             value={title}
             onChangeText={setTitle}
             style={input}
+            autoFocus
           />
-
           <TextInput
             placeholder="Subject (optional)"
             value={subject}
             onChangeText={setSubject}
             style={input}
           />
-
+          
           <Pressable
             onPress={() => {
+              Haptics.selectionAsync();
               setPickerMode('date');
               setShowPicker(true);
             }}
             style={input}
           >
-            <Text>
-              {dueDate
-                ? dueDate.toLocaleString()
-                : 'Pick due date & time'}
-            </Text>
+            <Text>{dueDate ? dueDate.toLocaleString() : 'Pick due date & time'}</Text>
           </Pressable>
 
           <Pressable onPress={saveDeadline} style={primaryBtn}>
-            <Text style={{ color: '#fff', textAlign: 'center' }}>
-              Save
-            </Text>
+            <Text style={{ color: '#fff', textAlign: 'center', fontWeight: '600' }}>Save</Text>
           </Pressable>
 
-          <Pressable
-            onPress={() => setShowForm(false)}
-            style={secondaryBtn}
-          >
+          <Pressable onPress={() => setShowForm(false)} style={secondaryBtn}>
             <Text style={{ textAlign: 'center' }}>Cancel</Text>
           </Pressable>
         </View>
@@ -358,22 +349,9 @@ export default function DeadlinesScreen() {
 
 /* ---------- Menu Item ---------- */
 
-const MenuItem = ({
-  label,
-  onPress,
-  danger,
-}: {
-  label: string;
-  onPress: () => void;
-  danger?: boolean;
-}) => (
-  <Pressable
-    onPress={onPress}
-    style={{ paddingVertical: 10 }}
-  >
-    <Text style={{ fontSize: 16, color: danger ? '#dc2626' : '#000' }}>
-      {label}
-    </Text>
+const MenuItem = ({ label, onPress, danger }: { label: string; onPress: () => void; danger?: boolean }) => (
+  <Pressable onPress={onPress} style={{ paddingVertical: 12 }}>
+    <Text style={{ fontSize: 16, color: danger ? '#dc2626' : '#000' }}>{label}</Text>
   </Pressable>
 );
 
@@ -381,29 +359,31 @@ const MenuItem = ({
 
 const input = {
   borderWidth: 1,
-  borderColor: '#000',
-  padding: 10,
-  borderRadius: 6,
+  borderColor: '#ccc',
+  padding: 14,
+  borderRadius: 8,
   marginTop: 12,
+  fontSize: 16,
 };
 
 const addBtn = {
   borderWidth: 1,
   borderColor: '#000',
-  padding: 10,
-  borderRadius: 6,
-  marginBottom: 16,
+  padding: 14,
+  borderRadius: 8,
+  marginBottom: 10,
+  backgroundColor: '#f5f5f5',
 };
 
 const primaryBtn = {
   backgroundColor: '#000',
-  padding: 12,
-  borderRadius: 6,
-  marginTop: 16,
+  padding: 16,
+  borderRadius: 8,
+  marginTop: 24,
 };
 
 const secondaryBtn = {
-  padding: 12,
-  borderRadius: 6,
+  padding: 16,
+  borderRadius: 8,
   marginTop: 8,
 };
