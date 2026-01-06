@@ -1,4 +1,5 @@
-import { View, Text, Pressable, FlatList, TextInput } from 'react-native';
+import { View, Text, Pressable, FlatList, TextInput, ViewStyle } from 'react-native';
+
 import { useState } from 'react';
 
 type Action =
@@ -240,7 +241,7 @@ export default function AttendanceScreen() {
   );
 }
 
-const btn = (color: string) => ({
+const btn = (color: string): ViewStyle => ({
   flex: 1,
   padding: 10,
   borderWidth: 1,
@@ -249,3 +250,4 @@ const btn = (color: string) => ({
   marginRight: 6,
   alignItems: 'center',
 });
+
