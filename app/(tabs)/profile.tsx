@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
 type UserProfile = {
@@ -20,11 +19,7 @@ type UserProfile = {
   course: string;
   year: string;
   semester: string;
-  isComplete: boolean;
 };
-
-// REMOVED static KEY
-// const PROFILE_KEY = 'user_profile';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<any>(null);
@@ -35,13 +30,13 @@ export default function ProfileScreen() {
     course: '',
     year: '',
     semester: '',
-    isComplete: false,
   });
   
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
+  // Buffer for edits
   const [editForm, setEditForm] = useState<UserProfile>(profile);
 
   useEffect(() => {
@@ -56,24 +51,31 @@ export default function ProfileScreen() {
          setLoading(false);
          return;
       }
-      
       setUser(user);
 
-      // Unique Key per user
-      const key = `user_profile_${user.id}`;
-      const saved = await AsyncStorage.getItem(key);
-      
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setProfile(parsed);
-        setEditForm(parsed);
-        
-        if (!parsed.isComplete) {
-          setShowOnboarding(true);
-        }
+      // Fetch Profile from Supabase
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (data) {
+        // Profile exists
+        const loadedProfile = {
+          fullName: data.full_name || '',
+          rollNumber: data.roll_number || '',
+          course: data.course || '',
+          year: data.year || '',
+          semester: data.semester || '',
+        };
+        setProfile(loadedProfile);
+        setEditForm(loadedProfile);
       } else {
+        // No profile found -> Trigger Onboarding
         setShowOnboarding(true);
       }
+
     } catch (e) {
       console.error('Load profile error:', e);
     } finally {
@@ -96,35 +98,54 @@ export default function ProfileScreen() {
     return true;
   };
 
-  const completeOnboarding = async () => {
-    if (!validateOnboarding()) return;
+  const saveToSupabase = async (newProfile: UserProfile) => {
     if (!user) return;
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const payload = {
+      id: user.id, // Primary Key matches User ID
+      full_name: newProfile.fullName,
+      roll_number: newProfile.rollNumber,
+      course: newProfile.course,
+      year: newProfile.year,
+      semester: newProfile.semester,
+      updated_at: new Date(),
+    };
 
-    const completeProfile = { ...editForm, isComplete: true };
-    
-    // Save to Unique Key
-    await AsyncStorage.setItem(`user_profile_${user.id}`, JSON.stringify(completeProfile));
-    
-    setProfile(completeProfile);
-    setShowOnboarding(false);
+    const { error } = await supabase
+      .from('profiles')
+      .upsert(payload);
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (error) throw error;
+  };
+
+  const completeOnboarding = async () => {
+    if (!validateOnboarding()) return;
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await saveToSupabase(editForm);
+      
+      setProfile(editForm);
+      setShowOnboarding(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
   };
 
   const saveProfile = async () => {
     if (!validateOnboarding()) return;
-    if (!user) return;
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await saveToSupabase(editForm);
 
-    const updatedProfile = { ...editForm, isComplete: true };
-    await AsyncStorage.setItem(`user_profile_${user.id}`, JSON.stringify(updatedProfile));
-    setProfile(updatedProfile);
-    setEditing(false);
-
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setProfile(editForm);
+      setEditing(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
   };
 
   const handleSignOut = async () => {
@@ -136,17 +157,8 @@ export default function ProfileScreen() {
         text: 'Sign Out',
         style: 'destructive',
         onPress: async () => {
-          try {
-            const { error } = await supabase.auth.signOut();
-            
-            if (error) {
-              Alert.alert('Error', error.message);
-            } else {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            }
-          } catch (err) {
-            Alert.alert('Error', 'An error occurred while signing out.');
-          }
+          const { error } = await supabase.auth.signOut();
+          if (error) Alert.alert('Error', error.message);
         },
       },
     ]);
@@ -158,34 +170,47 @@ export default function ProfileScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     Alert.alert(
       'Clear All Data',
-      'This will delete all your attendance, marks, and deadlines. This cannot be undone!',
+      'This will delete all your attendance, marks, and deadlines from the database. This cannot be undone!',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Clear Everything',
           style: 'destructive',
           onPress: async () => {
-            // Delete ONLY this user's data
-            await AsyncStorage.multiRemove([
-              `user_profile_${user.id}`,
-              `attendance_subjects_${user.id}`,
-              `marks_subjects_${user.id}`,
-              `deadlines_${user.id}`,
-              `deadlines_history_${user.id}`,
-            ]);
-            
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Alert.alert('Success', 'All app data has been cleared');
-            
-            setProfile({
-                fullName: '',
-                rollNumber: '',
-                course: '',
-                year: '',
-                semester: '',
-                isComplete: false,
-            });
-            setShowOnboarding(true);
+            try {
+              setLoading(true);
+              
+              // Delete from all tables for this user
+              await Promise.all([
+                supabase.from('attendance_subjects').delete().eq('user_id', user.id),
+                supabase.from('marks_subjects').delete().eq('user_id', user.id),
+                supabase.from('deadlines').delete().eq('user_id', user.id),
+                supabase.from('profiles').delete().eq('id', user.id),
+              ]);
+              
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              
+              // Reset State
+              setProfile({
+                  fullName: '',
+                  rollNumber: '',
+                  course: '',
+                  year: '',
+                  semester: '',
+              });
+              setEditForm({
+                  fullName: '',
+                  rollNumber: '',
+                  course: '',
+                  year: '',
+                  semester: '',
+              });
+              setShowOnboarding(true);
+            } catch (error: any) {
+              Alert.alert('Error', 'Could not clear data: ' + error.message);
+            } finally {
+              setLoading(false);
+            }
           },
         },
       ]

@@ -7,11 +7,9 @@ import {
   Alert,
   Modal,
   ViewStyle,
-  ActivityIndicator, // Added for loading state
 } from 'react-native';
 import { useState, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../../lib/supabase'; // Import Supabase
+import { supabase } from '../../lib/supabase'; 
 
 type Action =
   | 'ATTENDED'
@@ -19,8 +17,10 @@ type Action =
   | 'ATTENDED_LAB'
   | 'MISSED_LAB';
 
+// Matches your SQL Table structure
 type Subject = {
   id: string;
+  user_id?: string;
   name: string;
   attended: number;
   missed: number;
@@ -31,55 +31,128 @@ export default function AttendanceScreen() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [subjectName, setSubjectName] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null); // Store User ID
+  const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /* ---------- Persistence ---------- */
+  /* ---------- Initialization ---------- */
 
-  // 1. Get User ID on mount
   useEffect(() => {
-    const getUser = async () => {
+    const init = async () => {
+      // 1. Get User
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
+      if (!user) {
+        setLoading(false);
+        return;
       }
+      setUserId(user.id);
+
+      // 2. Fetch Data from Supabase
+      const { data, error } = await supabase
+        .from('attendance_subjects')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        Alert.alert('Error fetching data', error.message);
+      } else if (data) {
+        setSubjects(data);
+      }
+      setLoading(false);
     };
-    getUser();
+
+    init();
   }, []);
 
-  // 2. Load data ONLY when userId is available
-  useEffect(() => {
-    if (!userId) return;
+  /* ---------- Database Actions ---------- */
 
-    const load = async () => {
-      try {
-        const key = `attendance_subjects_${userId}`; // Unique Key
-        const saved = await AsyncStorage.getItem(key);
-        if (saved) {
-          setSubjects(JSON.parse(saved));
-        } else {
-          setSubjects([]); // Reset if new user has no data
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
+  const addSubject = async () => {
+    if (!subjectName.trim() || !userId) return;
+
+    // Create temporary object for Optimistic UI (optional) or just wait for DB
+    const newSubjectPayload = {
+      user_id: userId,
+      name: subjectName,
+      attended: 0,
+      missed: 0,
+      history: [],
     };
-    load();
-  }, [userId]);
 
-  // 3. Save data ONLY when userId is available
-  useEffect(() => {
-    if (!userId || loading) return;
-    const key = `attendance_subjects_${userId}`; // Unique Key
-    AsyncStorage.setItem(key, JSON.stringify(subjects));
-  }, [subjects, userId, loading]);
+    // 1. Insert into Supabase
+    const { data, error } = await supabase
+      .from('attendance_subjects')
+      .insert(newSubjectPayload)
+      .select()
+      .single();
 
-  /* ---------- Helpers ---------- */
+    if (error) {
+      Alert.alert('Error', error.message);
+      return;
+    }
 
-  const updateSubject = (id: string, fn: (s: Subject) => Subject) => {
-    setSubjects(prev => prev.map(s => (s.id === id ? fn(s) : s)));
+    // 2. Update Local State with the real data (including the new UUID)
+    if (data) {
+      setSubjects(prev => [...prev, data]);
+      setSubjectName('');
+    }
+  };
+
+  const removeSubject = (id: string) => {
+    Alert.alert('Delete subject?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          // 1. Update UI immediately
+          const previousSubjects = [...subjects];
+          setSubjects(prev => prev.filter(s => s.id !== id));
+
+          // 2. Delete from Supabase
+          const { error } = await supabase
+            .from('attendance_subjects')
+            .delete()
+            .eq('id', id);
+
+          // 3. Revert if error
+          if (error) {
+            Alert.alert('Error', 'Could not delete subject');
+            setSubjects(previousSubjects);
+          }
+        },
+      },
+    ]);
+  };
+
+  /* ---------- Helpers & Logic ---------- */
+
+  // Refactored to handle Async DB updates
+  const updateSubject = async (id: string, fn: (s: Subject) => Subject) => {
+    // Find the specific subject
+    const subject = subjects.find(s => s.id === id);
+    if (!subject) return;
+
+    // Calculate new state
+    const newSubject = fn(subject);
+
+    // 1. Optimistic Update (Update UI Immediately)
+    setSubjects(prev => prev.map(s => (s.id === id ? newSubject : s)));
+
+    // 2. Sync to Supabase
+    // We only update the changing fields to save bandwidth
+    const { error } = await supabase
+      .from('attendance_subjects')
+      .update({
+        attended: newSubject.attended,
+        missed: newSubject.missed,
+        history: newSubject.history,
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Sync failed:', error);
+      Alert.alert('Sync Error', 'Your last change was not saved.');
+      // Optionally revert UI here if needed
+    }
   };
 
   const push = (s: Subject, action: Action, a = 0, m = 0): Subject => ({
@@ -107,37 +180,6 @@ export default function AttendanceScreen() {
       missed: Math.max(0, missed),
       history: s.history.slice(0, -1),
     };
-  };
-
-  /* ---------- Actions ---------- */
-
-  const addSubject = () => {
-    if (!subjectName.trim()) return;
-
-    setSubjects(prev => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        name: subjectName,
-        attended: 0,
-        missed: 0,
-        history: [],
-      },
-    ]);
-
-    setSubjectName('');
-  };
-
-  const removeSubject = (id: string) => {
-    Alert.alert('Delete subject?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () =>
-          setSubjects(prev => prev.filter(s => s.id !== id)),
-      },
-    ]);
   };
 
   /* ---------- Math ---------- */

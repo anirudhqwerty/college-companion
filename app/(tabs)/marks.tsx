@@ -10,9 +10,8 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { useEffect, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { supabase } from '../../lib/supabase'; // Import Supabase
+import { supabase } from '../../lib/supabase';
 
 /* ---------- Types ---------- */
 
@@ -47,34 +46,31 @@ export default function MarksScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /* ---------- Load / Save ---------- */
+  /* ---------- Load Data ---------- */
   
-  // 1. Get User ID
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserId(user.id);
-    });
-  }, []);
-
-  // 2. Load
-  useEffect(() => {
-    if(!userId) return;
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem(`marks_subjects_${userId}`);
-        if (saved) setSubjects(JSON.parse(saved));
-        else setSubjects([]);
-      } finally {
+    const init = async () => {
+      // 1. Get User
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
         setLoading(false);
+        return;
       }
-    })();
-  }, [userId]);
+      setUserId(user.id);
 
-  // 3. Save
-  useEffect(() => {
-    if(!userId || loading) return;
-    AsyncStorage.setItem(`marks_subjects_${userId}`, JSON.stringify(subjects));
-  }, [subjects, userId, loading]);
+      // 2. Fetch Data
+      const { data, error } = await supabase
+        .from('marks_subjects')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) Alert.alert('Error', error.message);
+      if (data) setSubjects(data);
+      
+      setLoading(false);
+    };
+    init();
+  }, []);
 
   /* ---------- Helpers ---------- */
 
@@ -88,22 +84,33 @@ export default function MarksScreen() {
 
   /* ---------- Subject Actions ---------- */
 
-  const addSubject = () => {
-    if (!subjectName.trim()) return;
+  const addSubject = async () => {
+    if (!subjectName.trim() || !userId) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowSubjectModal(false); // Close immediately
 
-    setSubjects(prev => [
-      ...prev,
-      {
-        id: Date.now().toString(),
+    // 1. Supabase Insert
+    const { data, error } = await supabase
+      .from('marks_subjects')
+      .insert({
+        user_id: userId,
         name: subjectName,
-        components: [],
-      },
-    ]);
+        components: []
+      })
+      .select()
+      .single();
 
-    setSubjectName('');
-    setShowSubjectModal(false);
+    if (error) {
+      Alert.alert('Error', error.message);
+      return;
+    }
+
+    // 2. Update Local State
+    if (data) {
+      setSubjects(prev => [...prev, data]);
+      setSubjectName('');
+    }
   };
 
   const deleteSubject = (id: string) => {
@@ -114,15 +121,29 @@ export default function MarksScreen() {
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: () =>
-          setSubjects(prev => prev.filter(s => s.id !== id)),
+        onPress: async () => {
+          // Optimistic Delete
+          const previousSubjects = [...subjects];
+          setSubjects(prev => prev.filter(s => s.id !== id));
+
+          // Supabase Delete
+          const { error } = await supabase
+            .from('marks_subjects')
+            .delete()
+            .eq('id', id);
+
+          if (error) {
+            Alert.alert('Error', 'Could not delete subject');
+            setSubjects(previousSubjects);
+          }
+        },
       },
     ]);
   };
 
   /* ---------- Component Actions ---------- */
 
-  const addComponent = () => {
+  const addComponent = async () => {
     if (!activeSubject || !compTitle.trim()) return;
 
     const o = Number(obtained);
@@ -130,45 +151,68 @@ export default function MarksScreen() {
     if (isNaN(o) || isNaN(t) || t <= 0 || o < 0 || o > t) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setShowComponentModal(false);
 
+    // 1. Create new component object
+    const newComponent: MarkComponent = {
+      id: Date.now().toString(), // Local ID is fine inside JSON
+      title: compTitle,
+      obtained: o,
+      total: t,
+    };
+
+    // 2. Calculate updated list of components for this subject
+    const updatedComponents = [...activeSubject.components, newComponent];
+
+    // 3. Optimistic Update (UI)
     setSubjects(prev =>
       prev.map(s =>
         s.id === activeSubject.id
-          ? {
-              ...s,
-              components: [
-                ...s.components,
-                {
-                  id: Date.now().toString(),
-                  title: compTitle,
-                  obtained: o,
-                  total: t,
-                },
-              ],
-            }
+          ? { ...s, components: updatedComponents }
           : s
       )
     );
 
+    // 4. Supabase Update (Save the array)
+    const { error } = await supabase
+      .from('marks_subjects')
+      .update({ components: updatedComponents })
+      .eq('id', activeSubject.id);
+
+    if (error) Alert.alert('Error', 'Could not save marks');
+
+    // Reset Form
     setCompTitle('');
     setObtained('');
     setTotal('');
-    setShowComponentModal(false);
     setActiveSubject(null);
   };
 
-  const deleteComponent = (sid: string, cid: string) => {
+  const deleteComponent = async (sid: string, cid: string) => {
     Haptics.selectionAsync();
+
+    const subject = subjects.find(s => s.id === sid);
+    if(!subject) return;
+
+    // 1. Calculate new array
+    const updatedComponents = subject.components.filter(c => c.id !== cid);
+
+    // 2. Optimistic Update
     setSubjects(prev =>
       prev.map(s =>
         s.id === sid
-          ? {
-              ...s,
-              components: s.components.filter(c => c.id !== cid),
-            }
+          ? { ...s, components: updatedComponents }
           : s
       )
     );
+
+    // 3. Supabase Update
+    const { error } = await supabase
+      .from('marks_subjects')
+      .update({ components: updatedComponents })
+      .eq('id', sid);
+
+    if (error) Alert.alert('Error', 'Could not remove mark');
   };
 
   /* ---------- UI ---------- */
@@ -176,7 +220,6 @@ export default function MarksScreen() {
   if (loading) return <View style={styles.container} />;
 
   return (
-    // FIXED: Added backgroundColor: '#fff' here
     <View style={styles.container}>
       <Text style={{ fontSize: 28, fontWeight: '700', marginBottom: 12 }}>
         Marks
@@ -320,14 +363,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
-    paddingTop: 60, // Added padding top for notches
-    backgroundColor: '#fff', // <--- THIS FIXED THE BLACK SCREEN
+    paddingTop: 60, 
+    backgroundColor: '#fff', 
   },
   modalContainer: {
     flex: 1,
     padding: 16,
     paddingTop: 60,
-    backgroundColor: '#fff', // Ensure modal is white too
+    backgroundColor: '#fff',
   },
   card: {
     borderWidth: 1,

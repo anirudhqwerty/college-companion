@@ -7,9 +7,9 @@ import {
   Alert,
   Platform,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
-import { useEffect, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useState, useCallback } from 'react';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../../lib/supabase';
@@ -20,7 +20,8 @@ type Deadline = {
   id: string;
   title: string;
   subject?: string;
-  dueAt: number;
+  dueAt: number; // We keep this as number for frontend math
+  is_completed?: boolean;
 };
 
 /* ---------- Screen ---------- */
@@ -42,50 +43,86 @@ export default function DeadlinesScreen() {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  /* ---------- Load / Save ---------- */
+  /* ---------- Load Data ---------- */
 
-  // 1. Get User
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) setUserId(user.id);
-    });
+  const fetchDeadlines = useCallback(async (uid: string) => {
+    try {
+      // 1. Fetch Active Deadlines
+      const { data: activeData, error: activeError } = await supabase
+        .from('deadlines')
+        .select('*')
+        .eq('is_completed', false)
+        .order('due_at', { ascending: true });
+
+      if (activeError) throw activeError;
+
+      // 2. Fetch History (Last 5 completed)
+      const { data: historyData, error: historyError } = await supabase
+        .from('deadlines')
+        .select('*')
+        .eq('is_completed', true)
+        .order('completed_at', { ascending: false })
+        .limit(5);
+
+      if (historyError) throw historyError;
+
+      // Map DB fields to App types
+      if (activeData) {
+        setDeadlines(
+          activeData.map((d: any) => ({
+            id: d.id,
+            title: d.title,
+            subject: d.subject,
+            dueAt: new Date(d.due_at).getTime(),
+          }))
+        );
+      }
+
+      if (historyData) {
+        setHistory(
+          historyData.map((d: any) => ({
+            id: d.id,
+            title: d.title,
+            subject: d.subject,
+            dueAt: new Date(d.due_at).getTime(),
+            is_completed: true,
+          }))
+        );
+      }
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Error', 'Could not load deadlines');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  // 2. Load
+  // Initial Load
   useEffect(() => {
-    if(!userId) return;
-
-    (async () => {
-      try {
-        const saved = await AsyncStorage.getItem(`deadlines_${userId}`);
-        const savedHistory = await AsyncStorage.getItem(`deadlines_history_${userId}`);
-        if (saved) setDeadlines(JSON.parse(saved));
-        else setDeadlines([]);
-
-        if (savedHistory) setHistory(JSON.parse(savedHistory));
-        else setHistory([]);
-      } finally {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setUserId(user.id);
+        fetchDeadlines(user.id);
+      } else {
         setLoading(false);
       }
-    })();
-  }, [userId]);
+    });
+  }, [fetchDeadlines]);
 
-  // 3. Save
-  useEffect(() => {
-    if(!userId || loading) return;
-    AsyncStorage.setItem(`deadlines_${userId}`, JSON.stringify(deadlines));
-  }, [deadlines, userId, loading]);
-
-  useEffect(() => {
-    if(!userId || loading) return;
-    AsyncStorage.setItem(`deadlines_history_${userId}`, JSON.stringify(history));
-  }, [history, userId, loading]);
+  const onRefresh = () => {
+    if (userId) {
+      setRefreshing(true);
+      fetchDeadlines(userId);
+    }
+  };
 
   /* ---------- Actions ---------- */
 
   const openAdd = () => {
-    Haptics.selectionAsync(); // Haptic feedback
+    Haptics.selectionAsync(); 
     setEditing(null);
     setTitle('');
     setSubject('');
@@ -104,33 +141,65 @@ export default function DeadlinesScreen() {
   };
 
   const saveDeadline = async () => {
-    if (!title.trim() || !dueDate) {
+    if (!title.trim() || !dueDate || !userId) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       return;
     }
 
-    // Success Haptic
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setShowForm(false); // Close immediately for speed
 
-    const newItem = {
-      id: editing ? editing.id : Date.now().toString(),
+    const payload = {
+      user_id: userId,
       title,
-      subject: subject.trim() || undefined,
-      dueAt: dueDate.getTime(),
+      subject: subject.trim() || null,
+      due_at: dueDate.toISOString(),
+      is_completed: false,
     };
 
     if (editing) {
-      setDeadlines(prev => prev.map(d => (d.id === editing.id ? newItem : d)));
-    } else {
-      setDeadlines(prev => [...prev, newItem]);
-    }
+      // Optimistic Update
+      setDeadlines(prev =>
+        prev.map(d =>
+          d.id === editing.id
+            ? { ...d, title, subject: subject.trim() || undefined, dueAt: dueDate.getTime() }
+            : d
+        )
+      );
 
-    setShowForm(false);
+      // Supabase Update
+      const { error } = await supabase
+        .from('deadlines')
+        .update(payload)
+        .eq('id', editing.id);
+
+      if (error) Alert.alert('Save Error', error.message);
+    } else {
+      // Supabase Insert (We wait for this one to get the real ID)
+      const { data, error } = await supabase
+        .from('deadlines')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (data) {
+        setDeadlines(prev => [
+          ...prev,
+          {
+            id: data.id,
+            title: data.title,
+            subject: data.subject,
+            dueAt: new Date(data.due_at).getTime(),
+          },
+        ]);
+      } else if (error) {
+        Alert.alert('Save Error', error.message);
+      }
+    }
     setEditing(null);
   };
 
-  const deleteDeadline = (id: string) => {
-    // Impact Haptic (heavier feel for delete)
+  const deleteDeadline = async (id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
     Alert.alert('Delete deadline?', 'This cannot be undone.', [
@@ -138,28 +207,42 @@ export default function DeadlinesScreen() {
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: () => {
+        onPress: async () => {
+          // Optimistic UI
           setDeadlines(prev => prev.filter(d => d.id !== id));
+          setHistory(prev => prev.filter(d => d.id !== id));
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+          // Supabase Delete
+          const { error } = await supabase.from('deadlines').delete().eq('id', id);
+          if (error) Alert.alert('Error', 'Could not delete item');
         },
       },
     ]);
     setMenuFor(null);
   };
 
-  const completeDeadline = (item: Deadline) => {
+  const completeDeadline = async (item: Deadline) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     
-    // 1. Remove from active list
+    // 1. Optimistic UI Update
     setDeadlines(prev => prev.filter(d => d.id !== item.id));
-
-    // 2. Add to history (keep top 5)
     setHistory(prev => {
-      const updated = [item, ...prev];
-      return updated.slice(0, 5);
+      const updated = [{ ...item, is_completed: true }, ...prev];
+      return updated.slice(0, 5); // Keep local history small
     });
-
     setMenuFor(null);
+
+    // 2. Supabase Update
+    const { error } = await supabase
+      .from('deadlines')
+      .update({ 
+        is_completed: true, 
+        completed_at: new Date().toISOString() 
+      })
+      .eq('id', item.id);
+
+    if (error) Alert.alert('Error', 'Could not mark complete');
   };
 
   /* ---------- Date Picker ---------- */
@@ -179,7 +262,11 @@ export default function DeadlinesScreen() {
       base.setDate(selected.getDate());
       setDueDate(new Date(base));
       setPickerMode('time');
-      setShowPicker(true);
+      // Keep picker open for time selection if needed, or close and reopen
+      if (Platform.OS === 'android') {
+          setShowPicker(false);
+          setTimeout(() => setShowPicker(true), 100);
+      }
     } else {
       const base = dueDate ?? new Date();
       base.setHours(selected.getHours());
@@ -200,13 +287,25 @@ export default function DeadlinesScreen() {
   const endOfTomorrow = new Date(startOfTomorrow);
   endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
 
-  const today = deadlines.filter(
-    d => d.dueAt >= startOfToday.getTime() && d.dueAt < startOfTomorrow.getTime()
-  );
-  const tomorrow = deadlines.filter(
-    d => d.dueAt >= startOfTomorrow.getTime() && d.dueAt < endOfTomorrow.getTime()
-  );
-  const upcoming = deadlines.filter(d => d.dueAt >= endOfTomorrow.getTime());
+  // Sorting helper
+  const sortByDate = (a: Deadline, b: Deadline) => a.dueAt - b.dueAt;
+
+  const today = deadlines
+    .filter(d => d.dueAt >= startOfToday.getTime() && d.dueAt < startOfTomorrow.getTime())
+    .sort(sortByDate);
+    
+  const tomorrow = deadlines
+    .filter(d => d.dueAt >= startOfTomorrow.getTime() && d.dueAt < endOfTomorrow.getTime())
+    .sort(sortByDate);
+
+  const upcoming = deadlines
+    .filter(d => d.dueAt >= endOfTomorrow.getTime())
+    .sort(sortByDate);
+  
+  // Catch overdue items (optional: show them in Today or a separate section)
+  const overdue = deadlines
+    .filter(d => d.dueAt < startOfToday.getTime())
+    .sort(sortByDate);
 
   /* ---------- UI ---------- */
 
@@ -245,10 +344,10 @@ export default function DeadlinesScreen() {
       {item.subject && <Text style={{ color: '#555' }}>{item.subject}</Text>}
 
       <Text style={{ color: '#666', marginTop: 4, fontSize: 12 }}>
-        {isHistory ? 'Completed' : `Due ${new Date(item.dueAt).toLocaleString()}`}
+        {isHistory ? 'Completed' : `Due ${new Date(item.dueAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`}
       </Text>
 
-      {/* 3-dot menu (Only for active items) */}
+      {/* 3-dot menu */}
       {!isHistory && (
         <Modal transparent visible={menuFor === item.id} animationType="fade">
           <Pressable
@@ -282,7 +381,17 @@ export default function DeadlinesScreen() {
         <Text style={{ textAlign: 'center', fontWeight: '600' }}>+ Add Deadline</Text>
       </Pressable>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {overdue.length > 0 && (
+          <>
+            <Section title="⚠️ Overdue" />
+            {overdue.map(d => <DeadlineCard key={d.id} item={d} />)}
+          </>
+        )}
+
         {today.length > 0 && (
           <>
             <Section title="🔥 Today" />
