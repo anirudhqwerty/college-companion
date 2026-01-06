@@ -46,7 +46,7 @@ export default function AuthScreen() {
       triggerHaptic('medium');
 
       const redirectUrl = makeRedirectUri({
-        scheme: 'exp',
+        scheme: 'collegecompanion',
       });
 
       console.log('redirect url is', redirectUrl);
