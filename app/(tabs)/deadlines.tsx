@@ -2,14 +2,17 @@ import {
   View,
   Text,
   Pressable,
-  FlatList,
   TextInput,
   Modal,
   Alert,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// import * as Notifications from 'expo-notifications'; // ❌ disabled for Expo Go
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+/* ---------- Types ---------- */
 
 type Deadline = {
   id: string;
@@ -20,13 +23,21 @@ type Deadline = {
 
 const STORAGE_KEY = 'deadlines';
 
+/* ---------- Screen ---------- */
+
 export default function DeadlinesScreen() {
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
-  const [showAdd, setShowAdd] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<Deadline | null>(null);
+
+  const [menuFor, setMenuFor] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState('');
   const [dueDate, setDueDate] = useState<Date | null>(null);
+
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
   /* ---------- Load / Save ---------- */
 
@@ -41,56 +52,59 @@ export default function DeadlinesScreen() {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(deadlines));
   }, [deadlines]);
 
-  /* ---------- Notifications (DISABLED) ---------- */
-  /*
-  const scheduleNotifications = async (d: Deadline) => {
-    const oneDayBefore = d.dueAt - 24 * 60 * 60 * 1000;
-
-    if (oneDayBefore > Date.now()) {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Deadline tomorrow',
-          body: d.title,
-        },
-        trigger: { date: new Date(oneDayBefore) } as any,
-      });
-    }
-
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: 'Deadline today',
-        body: d.title,
-      },
-      trigger: { date: new Date(d.dueAt) } as any,
-    });
-  };
-  */
-
   /* ---------- Actions ---------- */
 
-  const addDeadline = async () => {
-    if (!title.trim() || !dueDate) return;
-
-    const d: Deadline = {
-      id: Date.now().toString(),
-      title,
-      subject: subject.trim() || undefined,
-      dueAt: dueDate.getTime(),
-    };
-
-    setDeadlines(prev => [...prev, d]);
-
-    // ❌ Notifications disabled for now
-    // await scheduleNotifications(d);
-
+  const openAdd = () => {
+    setEditing(null);
     setTitle('');
     setSubject('');
     setDueDate(null);
-    setShowAdd(false);
+    setShowForm(true);
   };
 
-  const removeDeadline = (id: string) => {
-    Alert.alert('Delete deadline?', '', [
+  const openEdit = (d: Deadline) => {
+    setEditing(d);
+    setTitle(d.title);
+    setSubject(d.subject ?? '');
+    setDueDate(new Date(d.dueAt));
+    setMenuFor(null);
+    setShowForm(true);
+  };
+
+  const saveDeadline = () => {
+    if (!title.trim() || !dueDate) return;
+
+    if (editing) {
+      setDeadlines(prev =>
+        prev.map(d =>
+          d.id === editing.id
+            ? {
+                ...d,
+                title,
+                subject: subject.trim() || undefined,
+                dueAt: dueDate.getTime(),
+              }
+            : d
+        )
+      );
+    } else {
+      setDeadlines(prev => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          title,
+          subject: subject.trim() || undefined,
+          dueAt: dueDate.getTime(),
+        },
+      ]);
+    }
+
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  const deleteDeadline = (id: string) => {
+    Alert.alert('Delete deadline?', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -99,6 +113,37 @@ export default function DeadlinesScreen() {
           setDeadlines(prev => prev.filter(d => d.id !== id)),
       },
     ]);
+    setMenuFor(null);
+  };
+
+  const completeDeadline = (id: string) => {
+    setDeadlines(prev => prev.filter(d => d.id !== id));
+    setMenuFor(null);
+  };
+
+  /* ---------- Date Picker ---------- */
+
+  const onPick = (_: any, selected?: Date) => {
+    if (!selected) {
+      setShowPicker(false);
+      return;
+    }
+
+    if (pickerMode === 'date') {
+      const base = dueDate ?? new Date();
+      base.setFullYear(selected.getFullYear());
+      base.setMonth(selected.getMonth());
+      base.setDate(selected.getDate());
+      setDueDate(new Date(base));
+      setPickerMode('time');
+      setShowPicker(true);
+    } else {
+      const base = dueDate ?? new Date();
+      base.setHours(selected.getHours());
+      base.setMinutes(selected.getMinutes());
+      setDueDate(new Date(base));
+      setShowPicker(false);
+    }
   };
 
   /* ---------- Grouping ---------- */
@@ -128,9 +173,9 @@ export default function DeadlinesScreen() {
 
   /* ---------- UI ---------- */
 
-  const renderItem = (item: Deadline) => (
-    <Pressable
-      onLongPress={() => removeDeadline(item.id)}
+  const DeadlineCard = ({ item }: { item: Deadline }) => (
+    <View
+      key={item.id}
       style={{
         borderWidth: 1,
         borderColor: '#ddd',
@@ -139,9 +184,21 @@ export default function DeadlinesScreen() {
         marginBottom: 8,
       }}
     >
-      <Text style={{ fontSize: 16, fontWeight: '600' }}>
-        {item.title}
-      </Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <Text style={{ fontSize: 16, fontWeight: '600' }}>
+          {item.title}
+        </Text>
+
+        <Pressable onPress={() => setMenuFor(item.id)}>
+          <Text style={{ fontSize: 22 }}>⋮</Text>
+        </Pressable>
+      </View>
 
       {item.subject && (
         <Text style={{ color: '#555' }}>{item.subject}</Text>
@@ -150,7 +207,56 @@ export default function DeadlinesScreen() {
       <Text style={{ color: '#666', marginTop: 4 }}>
         Due {new Date(item.dueAt).toLocaleString()}
       </Text>
-    </Pressable>
+
+      {/* 3-dot menu */}
+      <Modal
+        transparent
+        visible={menuFor === item.id}
+        animationType="fade"
+      >
+        <Pressable
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.3)',
+            justifyContent: 'center',
+            padding: 32,
+          }}
+          onPress={() => setMenuFor(null)}
+        >
+          <View
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 8,
+              padding: 12,
+            }}
+          >
+            <MenuItem label="✏️ Edit" onPress={() => openEdit(item)} />
+            <MenuItem
+              label="✅ Mark as completed"
+              onPress={() => completeDeadline(item.id)}
+            />
+            <MenuItem
+              label="🗑 Delete"
+              danger
+              onPress={() => deleteDeadline(item.id)}
+            />
+          </View>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+
+  const Section = ({ title }: { title: string }) => (
+    <Text
+      style={{
+        fontSize: 18,
+        fontWeight: '700',
+        marginTop: 16,
+        marginBottom: 6,
+      }}
+    >
+      {title}
+    </Text>
   );
 
   return (
@@ -159,55 +265,40 @@ export default function DeadlinesScreen() {
         Deadlines
       </Text>
 
-      <Pressable
-        onPress={() => setShowAdd(true)}
-        style={{
-          borderWidth: 1,
-          borderColor: '#000',
-          padding: 10,
-          borderRadius: 6,
-          marginBottom: 16,
-        }}
-      >
+      <Pressable onPress={openAdd} style={addBtn}>
         <Text style={{ textAlign: 'center', fontWeight: '600' }}>
           + Add Deadline
         </Text>
       </Pressable>
 
-      <FlatList
-        data={[]}
-        renderItem={null}
-        ListHeaderComponent={
+      <ScrollView>
+        {today.length > 0 && (
           <>
-            {today.length > 0 && (
-              <>
-                <Section title="🔥 Today" />
-                {today.map(renderItem)}
-              </>
-            )}
-
-            {tomorrow.length > 0 && (
-              <>
-                <Section title="⏰ Tomorrow" />
-                {tomorrow.map(renderItem)}
-              </>
-            )}
-
-            {upcoming.length > 0 && (
-              <>
-                <Section title="📅 Upcoming" />
-                {upcoming.map(renderItem)}
-              </>
-            )}
+            <Section title="🔥 Today" />
+            {today.map(d => <DeadlineCard key={d.id} item={d} />)}
           </>
-        }
-      />
+        )}
 
-      {/* Add modal */}
-      <Modal visible={showAdd} animationType="slide">
+        {tomorrow.length > 0 && (
+          <>
+            <Section title="⏰ Tomorrow" />
+            {tomorrow.map(d => <DeadlineCard key={d.id} item={d} />)}
+          </>
+        )}
+
+        {upcoming.length > 0 && (
+          <>
+            <Section title="📅 Upcoming" />
+            {upcoming.map(d => <DeadlineCard key={d.id} item={d} />)}
+          </>
+        )}
+      </ScrollView>
+
+      {/* Add / Edit Modal */}
+      <Modal visible={showForm} animationType="slide">
         <View style={{ flex: 1, padding: 16 }}>
           <Text style={{ fontSize: 22, fontWeight: '700' }}>
-            Add Deadline
+            {editing ? 'Edit Deadline' : 'Add Deadline'}
           </Text>
 
           <TextInput
@@ -225,48 +316,68 @@ export default function DeadlinesScreen() {
           />
 
           <Pressable
-            onPress={() => setDueDate(new Date())}
+            onPress={() => {
+              setPickerMode('date');
+              setShowPicker(true);
+            }}
             style={input}
           >
             <Text>
               {dueDate
                 ? dueDate.toLocaleString()
-                : 'Set due date (tap)'}
+                : 'Pick due date & time'}
             </Text>
           </Pressable>
 
-          <Pressable onPress={addDeadline} style={primaryBtn}>
+          <Pressable onPress={saveDeadline} style={primaryBtn}>
             <Text style={{ color: '#fff', textAlign: 'center' }}>
               Save
             </Text>
           </Pressable>
 
           <Pressable
-            onPress={() => setShowAdd(false)}
+            onPress={() => setShowForm(false)}
             style={secondaryBtn}
           >
             <Text style={{ textAlign: 'center' }}>Cancel</Text>
           </Pressable>
         </View>
       </Modal>
+
+      {showPicker && (
+        <DateTimePicker
+          value={dueDate ?? new Date()}
+          mode={pickerMode}
+          display={Platform.OS === 'ios' ? 'inline' : 'default'}
+          onChange={onPick}
+        />
+      )}
     </View>
   );
 }
 
-/* ---------- Small components ---------- */
+/* ---------- Menu Item ---------- */
 
-const Section = ({ title }: { title: string }) => (
-  <Text
-    style={{
-      fontSize: 18,
-      fontWeight: '700',
-      marginTop: 16,
-      marginBottom: 6,
-    }}
+const MenuItem = ({
+  label,
+  onPress,
+  danger,
+}: {
+  label: string;
+  onPress: () => void;
+  danger?: boolean;
+}) => (
+  <Pressable
+    onPress={onPress}
+    style={{ paddingVertical: 10 }}
   >
-    {title}
-  </Text>
+    <Text style={{ fontSize: 16, color: danger ? '#dc2626' : '#000' }}>
+      {label}
+    </Text>
+  </Pressable>
 );
+
+/* ---------- Styles ---------- */
 
 const input = {
   borderWidth: 1,
@@ -274,6 +385,14 @@ const input = {
   padding: 10,
   borderRadius: 6,
   marginTop: 12,
+};
+
+const addBtn = {
+  borderWidth: 1,
+  borderColor: '#000',
+  padding: 10,
+  borderRadius: 6,
+  marginBottom: 16,
 };
 
 const primaryBtn = {
