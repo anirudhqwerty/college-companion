@@ -8,10 +8,12 @@ import {
   StyleSheet,
   Modal,
   ActivityIndicator,
+  Linking, // added for the linkedin link
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import * as Haptics from 'expo-haptics';
+import { Feather } from '@expo/vector-icons'; // using feather vectors
 
 type UserProfile = {
   fullName: string;
@@ -164,13 +166,18 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const handleOpenLink = () => {
+    Haptics.selectionAsync();
+    Linking.openURL('https://linkedin.com/in/anirudhqwerty');
+  };
+
   const clearAllData = () => {
     if (!user) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     Alert.alert(
       'Clear All Data',
-      'This will delete all your attendance, marks, and deadlines from the database. This cannot be undone!',
+      'This will delete all your attendance, marks, and deadlines. This cannot be undone!',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -233,10 +240,13 @@ export default function ProfileScreen() {
         onRequestClose={() => {}} 
       >
         <ScrollView style={styles.onboardingContainer}>
-          <Text style={styles.onboardingTitle}>Welcome! 👋</Text>
-          <Text style={styles.onboardingSubtitle}>
-            To give you the best experience, we need a few details. This is mandatory to proceed.
-          </Text>
+          <View style={styles.onboardingHeader}>
+             <Feather name="smile" size={48} color="#000" style={{ marginBottom: 16 }} />
+             <Text style={styles.onboardingTitle}>Welcome!</Text>
+             <Text style={styles.onboardingSubtitle}>
+                To give you the best experience, we need a few details. This is mandatory to proceed.
+             </Text>
+          </View>
 
           <View style={styles.onboardingForm}>
             <InfoInput
@@ -275,6 +285,7 @@ export default function ProfileScreen() {
               style={styles.onboardingBtn}
             >
               <Text style={styles.onboardingBtnText}>Complete Setup</Text>
+              <Feather name="arrow-right" size={20} color="#fff" />
             </Pressable>
           </View>
         </ScrollView>
@@ -283,9 +294,11 @@ export default function ProfileScreen() {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Profile</Text>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60 }}>
+      <View style={styles.headerSpacer} />
+      <Text style={styles.screenTitle}>Profile</Text>
 
+      {/* Main Profile Card */}
       <View style={styles.card}>
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
@@ -300,30 +313,37 @@ export default function ProfileScreen() {
                 : user?.email?.[0]?.toUpperCase() || '?'}
             </Text>
           </View>
+          <View style={styles.profileTexts}>
+             <Text style={styles.profileName}>{profile.fullName || 'User'}</Text>
+             <Text style={styles.email}>{user?.email}</Text>
+             <View style={styles.idBadge}>
+                <Text style={styles.idText}>ID: {profile.rollNumber || 'Not Set'}</Text>
+             </View>
+          </View>
         </View>
-
-        <Text style={styles.email}>{user?.email}</Text>
-        <Text style={styles.provider}>
-          Student ID: {profile.rollNumber || 'Not Set'}
-        </Text>
       </View>
 
+      {/* Academic Info Card */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Personal Information</Text>
+          <View style={{flexDirection: 'row', alignItems: 'center'}}>
+             <Feather name="book-open" size={18} color="#000" style={{marginRight: 8}} />
+             <Text style={styles.cardTitle}>Academic Details</Text>
+          </View>
           <Pressable
             onPress={() => {
               if (editing) setEditForm(profile);
               setEditing(!editing);
               Haptics.selectionAsync();
             }}
+            style={styles.editBtnContainer}
           >
             <Text style={styles.editBtn}>{editing ? 'Cancel' : 'Edit'}</Text>
           </Pressable>
         </View>
 
         {editing ? (
-          <>
+          <View style={{ gap: 12 }}>
             <InfoInput
               label="Full Name"
               value={editForm.fullName}
@@ -358,42 +378,74 @@ export default function ProfileScreen() {
             <Pressable onPress={saveProfile} style={styles.saveBtn}>
               <Text style={styles.saveBtnText}>Save Changes</Text>
             </Pressable>
-          </>
+          </View>
         ) : (
-          <>
-            <InfoRow label="Full Name" value={profile.fullName} />
-            <InfoRow label="Roll Number" value={profile.rollNumber} />
-            <InfoRow label="Course" value={profile.course} />
-            <InfoRow label="Year" value={profile.year} />
-            <InfoRow label="Semester" value={profile.semester} />
-          </>
+          <View>
+            <InfoRow label="Course" value={profile.course} icon="bookmark" />
+            <View style={styles.divider} />
+            <InfoRow label="Year" value={profile.year} icon="calendar" />
+            <View style={styles.divider} />
+            <InfoRow label="Semester" value={profile.semester} icon="clock" />
+          </View>
         )}
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Actions</Text>
-
-        <Pressable onPress={clearAllData} style={styles.actionBtn}>
-          <Text style={styles.actionBtnText}>🗑️ Clear App Data</Text>
-        </Pressable>
-
-        <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
-          <Text style={styles.signOutBtnText}>Sign Out</Text>
-        </Pressable>
+      {/* Actions Section - Compact Style */}
+      <View style={styles.sectionLabelContainer}>
+         <Text style={styles.sectionLabel}>ACCOUNT ACTIONS</Text>
       </View>
 
+      <View style={styles.actionGroup}>
+        <ActionRow 
+            label="Clear App Data" 
+            icon="trash-2" 
+            isDestructive 
+            onPress={clearAllData} 
+        />
+        <View style={styles.divider} />
+        <ActionRow 
+            label="Sign Out" 
+            icon="log-out" 
+            onPress={handleSignOut} 
+        />
+      </View>
+
+      {/* Footer with Anirudh Link */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>College Companion v1.0</Text>
+        <Pressable onPress={handleOpenLink} style={styles.madeByContainer}>
+           <Text style={styles.madeByText}>Made by </Text>
+           <Text style={styles.madeByName}>Anirudh</Text>
+           <Feather name="external-link" size={12} color="#007AFF" style={{ marginLeft: 4 }} />
+        </Pressable>
+        <Text style={styles.versionText}>v1.0.0</Text>
       </View>
 
-      <View style={{ height: 40 }} />
     </ScrollView>
   );
 }
 
-const InfoRow = ({ label, value }: { label: string; value: string }) => (
+// Compact Action Row Component
+const ActionRow = ({ label, icon, onPress, isDestructive }: any) => (
+  <Pressable 
+    onPress={onPress} 
+    style={({pressed}) => [styles.actionRow, pressed && { backgroundColor: '#f9f9f9' }]}
+  >
+    <View style={styles.actionRowLeft}>
+       <View style={[styles.iconBox, isDestructive && { backgroundColor: '#fee2e2' }]}>
+          <Feather name={icon} size={18} color={isDestructive ? '#dc2626' : '#333'} />
+       </View>
+       <Text style={[styles.actionLabel, isDestructive && { color: '#dc2626' }]}>{label}</Text>
+    </View>
+    <Feather name="chevron-right" size={18} color="#ccc" />
+  </Pressable>
+);
+
+const InfoRow = ({ label, value, icon }: { label: string; value: string, icon: keyof typeof Feather.glyphMap }) => (
   <View style={styles.infoRow}>
-    <Text style={styles.infoLabel}>{label}</Text>
+    <View style={styles.infoRowLeft}>
+       <Feather name={icon} size={14} color="#999" style={{ marginRight: 8 }} />
+       <Text style={styles.infoLabel}>{label}</Text>
+    </View>
     <Text style={styles.infoValue}>{value || '-'}</Text>
   </View>
 );
@@ -415,6 +467,7 @@ const InfoInput = ({
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
+      placeholderTextColor="#ccc"
       style={styles.input}
     />
   </View>
@@ -423,61 +476,77 @@ const InfoInput = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
-    paddingTop: 60,
-    backgroundColor: '#fff',
+    padding: 20,
+    backgroundColor: '#f8f9fa', // softer background
   },
+  headerSpacer: { height: 40 },
+  screenTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#111',
+    marginBottom: 24,
+  },
+  
+  // Onboarding Styles
   onboardingContainer: {
     flex: 1,
     padding: 24,
-    paddingTop: 80,
     backgroundColor: '#fff',
   },
+  onboardingHeader: {
+      marginTop: 60,
+      alignItems: 'center',
+  },
   onboardingTitle: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: 28,
+    fontWeight: '800',
     marginBottom: 8,
+    color: '#111'
   },
   onboardingSubtitle: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#666',
+    textAlign: 'center',
     marginBottom: 32,
     lineHeight: 22,
+    maxWidth: '80%'
   },
   onboardingForm: {
-    marginTop: 16,
     paddingBottom: 40,
   },
   onboardingBtn: {
     backgroundColor: '#000',
     padding: 18,
-    borderRadius: 12,
+    borderRadius: 16,
     marginTop: 24,
-    elevation: 2,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
   onboardingBtnText: {
     color: '#fff',
-    textAlign: 'center',
     fontWeight: '700',
-    fontSize: 18,
+    fontSize: 16,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
+
+  // Cards
   card: {
     backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 20,
-    marginBottom: 16,
+    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
     elevation: 2,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -486,50 +555,76 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   cardTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
-    marginBottom: 12,
+    color: '#111',
   },
+  
+  // Profile Header Specifics
   avatarContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: '#111',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginRight: 16,
   },
   avatarText: {
     color: '#fff',
-    fontSize: 32,
+    fontSize: 24,
     fontWeight: '700',
   },
-  email: {
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginBottom: 4,
+  profileTexts: {
+      flex: 1,
   },
-  provider: {
+  profileName: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: '#111',
+  },
+  email: {
     fontSize: 14,
     color: '#666',
-    textAlign: 'center',
+    marginTop: 2,
+  },
+  idBadge: {
+      backgroundColor: '#f3f4f6',
+      alignSelf: 'flex-start',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+      marginTop: 8,
+  },
+  idText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: '#444',
+  },
+
+  editBtnContainer: {
+      padding: 4,
   },
   editBtn: {
     color: '#007AFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
   },
+  
+  // Info Rows
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  infoRowLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
   },
   infoLabel: {
     fontSize: 14,
@@ -539,69 +634,112 @@ const styles = StyleSheet.create({
   infoValue: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#000',
+    color: '#111',
   },
+  divider: {
+      height: 1,
+      backgroundColor: '#f3f4f6',
+  },
+
+  // Inputs
   inputGroup: {
-    marginBottom: 16,
+    marginBottom: 12,
   },
   inputLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 6,
+    color: '#666',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#e5e7eb',
     padding: 14,
-    borderRadius: 10,
+    borderRadius: 12,
     fontSize: 16,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: '#f9fafb',
+    color: '#000',
   },
   saveBtn: {
     backgroundColor: '#000',
     padding: 16,
-    borderRadius: 10,
+    borderRadius: 12,
     marginTop: 12,
+    alignItems: 'center',
   },
   saveBtnText: {
     color: '#fff',
-    textAlign: 'center',
-    fontWeight: '600',
+    fontWeight: '700',
     fontSize: 16,
   },
-  actionBtn: {
-    borderWidth: 1,
-    borderColor: '#fee2e2',
-    backgroundColor: '#fef2f2',
+
+  // Compact Actions Group
+  sectionLabelContainer: {
+      paddingHorizontal: 12,
+      marginBottom: 8,
+  },
+  sectionLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#888',
+      letterSpacing: 0.5,
+  },
+  actionGroup: {
+      backgroundColor: '#fff',
+      borderRadius: 16,
+      overflow: 'hidden',
+      marginBottom: 30,
+      borderWidth: 1,
+      borderColor: '#f0f0f0',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 16,
-    borderRadius: 10,
-    marginBottom: 12,
   },
-  actionBtnText: {
-    color: '#dc2626',
-    textAlign: 'center',
-    fontWeight: '600',
+  actionRowLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+  },
+  iconBox: {
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      backgroundColor: '#f3f4f6',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+  },
+  actionLabel: {
     fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
   },
-  signOutBtn: {
-    backgroundColor: '#111',
-    padding: 16,
-    borderRadius: 10,
-  },
-  signOutBtnText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontWeight: '600',
-    fontSize: 16,
-  },
+
+  // Footer
   footer: {
     alignItems: 'center',
-    marginTop: 16,
-    paddingVertical: 16,
+    paddingVertical: 10,
+    gap: 4
   },
-  footerText: {
-    fontSize: 12,
-    color: '#999',
+  madeByContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+  },
+  madeByText: {
+      fontSize: 14,
+      color: '#999',
+  },
+  madeByName: {
+      fontSize: 14,
+      color: '#007AFF',
+      fontWeight: '600',
+  },
+  versionText: {
+    fontSize: 11,
+    color: '#ccc',
   },
 });
