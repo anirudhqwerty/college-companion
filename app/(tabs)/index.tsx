@@ -7,9 +7,11 @@ import {
   Alert,
   Modal,
   ViewStyle,
+  ActivityIndicator, // Added for loading state
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '../../lib/supabase'; // Import Supabase
 
 type Action =
   | 'ATTENDED'
@@ -25,26 +27,54 @@ type Subject = {
   history: Action[];
 };
 
-const STORAGE_KEY = 'attendance_subjects';
-
 export default function AttendanceScreen() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [subjectName, setSubjectName] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null); // Store User ID
+  const [loading, setLoading] = useState(true);
 
   /* ---------- Persistence ---------- */
 
+  // 1. Get User ID on mount
   useEffect(() => {
-    const load = async () => {
-      const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      if (saved) setSubjects(JSON.parse(saved));
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+      }
     };
-    load();
+    getUser();
   }, []);
 
+  // 2. Load data ONLY when userId is available
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(subjects));
-  }, [subjects]);
+    if (!userId) return;
+
+    const load = async () => {
+      try {
+        const key = `attendance_subjects_${userId}`; // Unique Key
+        const saved = await AsyncStorage.getItem(key);
+        if (saved) {
+          setSubjects(JSON.parse(saved));
+        } else {
+          setSubjects([]); // Reset if new user has no data
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [userId]);
+
+  // 3. Save data ONLY when userId is available
+  useEffect(() => {
+    if (!userId || loading) return;
+    const key = `attendance_subjects_${userId}`; // Unique Key
+    AsyncStorage.setItem(key, JSON.stringify(subjects));
+  }, [subjects, userId, loading]);
 
   /* ---------- Helpers ---------- */
 
@@ -131,6 +161,10 @@ export default function AttendanceScreen() {
   };
 
   /* ---------- UI ---------- */
+
+  if (loading) {
+     return <View style={{flex:1, backgroundColor:'#fff'}} />;
+  }
 
   return (
     <View style={{ flex: 1, padding: 16, backgroundColor: '#fff' }}>
@@ -284,8 +318,6 @@ export default function AttendanceScreen() {
     </View>
   );
 }
-
-/* ---------- Small components ---------- */
 
 const MenuItem = ({
   label,

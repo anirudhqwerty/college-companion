@@ -7,6 +7,7 @@ import {
   Alert,
   StyleSheet,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
@@ -22,10 +23,12 @@ type UserProfile = {
   isComplete: boolean;
 };
 
-const PROFILE_KEY = 'user_profile';
+// REMOVED static KEY
+// const PROFILE_KEY = 'user_profile';
 
 export default function ProfileScreen() {
   const [user, setUser] = useState<any>(null);
+  
   const [profile, setProfile] = useState<UserProfile>({
     fullName: '',
     rollNumber: '',
@@ -34,11 +37,11 @@ export default function ProfileScreen() {
     semester: '',
     isComplete: false,
   });
+  
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  // Temporary state for editing
   const [editForm, setEditForm] = useState<UserProfile>(profile);
 
   useEffect(() => {
@@ -46,27 +49,36 @@ export default function ProfileScreen() {
   }, []);
 
   const loadUserAndProfile = async () => {
-    // Get current user from Supabase
-    const { data: { user } } = await supabase.auth.getUser();
-    setUser(user);
-
-    // Load profile from AsyncStorage
-    const saved = await AsyncStorage.getItem(PROFILE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setProfile(parsed);
-      setEditForm(parsed);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
       
-      // Show onboarding if profile is incomplete
-      if (!parsed.isComplete) {
+      if (!user) {
+         setLoading(false);
+         return;
+      }
+      
+      setUser(user);
+
+      // Unique Key per user
+      const key = `user_profile_${user.id}`;
+      const saved = await AsyncStorage.getItem(key);
+      
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setProfile(parsed);
+        setEditForm(parsed);
+        
+        if (!parsed.isComplete) {
+          setShowOnboarding(true);
+        }
+      } else {
         setShowOnboarding(true);
       }
-    } else {
-      // No profile exists, show onboarding
-      setShowOnboarding(true);
+    } catch (e) {
+      console.error('Load profile error:', e);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const validateOnboarding = () => {
@@ -77,7 +89,8 @@ export default function ProfileScreen() {
       !editForm.year.trim() ||
       !editForm.semester.trim()
     ) {
-      Alert.alert('Incomplete', 'Please fill in all fields');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Missing Fields', 'Please fill in all details to continue.');
       return false;
     }
     return true;
@@ -85,11 +98,15 @@ export default function ProfileScreen() {
 
   const completeOnboarding = async () => {
     if (!validateOnboarding()) return;
+    if (!user) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const completeProfile = { ...editForm, isComplete: true };
-    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(completeProfile));
+    
+    // Save to Unique Key
+    await AsyncStorage.setItem(`user_profile_${user.id}`, JSON.stringify(completeProfile));
+    
     setProfile(completeProfile);
     setShowOnboarding(false);
 
@@ -98,11 +115,12 @@ export default function ProfileScreen() {
 
   const saveProfile = async () => {
     if (!validateOnboarding()) return;
+    if (!user) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const updatedProfile = { ...editForm, isComplete: true };
-    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(updatedProfile));
+    await AsyncStorage.setItem(`user_profile_${user.id}`, JSON.stringify(updatedProfile));
     setProfile(updatedProfile);
     setEditing(false);
 
@@ -122,16 +140,11 @@ export default function ProfileScreen() {
             const { error } = await supabase.auth.signOut();
             
             if (error) {
-              console.error('Sign out error:', error);
-              Alert.alert('Error', 'Failed to sign out. Please try again.');
+              Alert.alert('Error', error.message);
             } else {
-              Haptics.notificationAsync(
-                Haptics.NotificationFeedbackType.Success
-              );
-              // Auth state change will be handled by _layout.tsx
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
           } catch (err) {
-            console.error('Sign out exception:', err);
             Alert.alert('Error', 'An error occurred while signing out.');
           }
         },
@@ -140,8 +153,9 @@ export default function ProfileScreen() {
   };
 
   const clearAllData = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    if (!user) return;
 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     Alert.alert(
       'Clear All Data',
       'This will delete all your attendance, marks, and deadlines. This cannot be undone!',
@@ -151,17 +165,27 @@ export default function ProfileScreen() {
           text: 'Clear Everything',
           style: 'destructive',
           onPress: async () => {
+            // Delete ONLY this user's data
             await AsyncStorage.multiRemove([
-              'attendance_subjects',
-              'marks_subjects',
-              'deadlines',
-              'deadlines_history',
+              `user_profile_${user.id}`,
+              `attendance_subjects_${user.id}`,
+              `marks_subjects_${user.id}`,
+              `deadlines_${user.id}`,
+              `deadlines_history_${user.id}`,
             ]);
-
-            Haptics.notificationAsync(
-              Haptics.NotificationFeedbackType.Success
-            );
-            Alert.alert('Success', 'All data has been cleared');
+            
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Success', 'All app data has been cleared');
+            
+            setProfile({
+                fullName: '',
+                rollNumber: '',
+                course: '',
+                year: '',
+                semester: '',
+                isComplete: false,
+            });
+            setShowOnboarding(true);
           },
         },
       ]
@@ -170,61 +194,54 @@ export default function ProfileScreen() {
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <Text>Loading...</Text>
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#000" />
       </View>
     );
   }
 
-  // Onboarding Modal
   if (showOnboarding) {
     return (
-      <Modal visible={true} animationType="slide">
+      <Modal 
+        visible={true} 
+        animationType="slide"
+        onRequestClose={() => {}} 
+      >
         <ScrollView style={styles.onboardingContainer}>
           <Text style={styles.onboardingTitle}>Welcome! 👋</Text>
           <Text style={styles.onboardingSubtitle}>
-            Let's set up your profile to get started
+            To give you the best experience, we need a few details. This is mandatory to proceed.
           </Text>
 
           <View style={styles.onboardingForm}>
             <InfoInput
               label="Full Name *"
               value={editForm.fullName}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, fullName: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, fullName: text })}
               placeholder="John Doe"
             />
             <InfoInput
               label="Roll Number *"
               value={editForm.rollNumber}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, rollNumber: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, rollNumber: text })}
               placeholder="21BCS001"
             />
             <InfoInput
               label="Course *"
               value={editForm.course}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, course: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, course: text })}
               placeholder="B.Tech CSE"
             />
             <InfoInput
               label="Year *"
               value={editForm.year}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, year: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, year: text })}
               placeholder="3rd Year"
             />
             <InfoInput
               label="Semester *"
               value={editForm.semester}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, semester: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, semester: text })}
               placeholder="6th Semester"
             />
 
@@ -244,7 +261,6 @@ export default function ProfileScreen() {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Profile</Text>
 
-      {/* User Info Card */}
       <View style={styles.card}>
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
@@ -256,26 +272,23 @@ export default function ProfileScreen() {
                     .join('')
                     .toUpperCase()
                     .slice(0, 2)
-                : user?.email?.[0].toUpperCase() || '?'}
+                : user?.email?.[0]?.toUpperCase() || '?'}
             </Text>
           </View>
         </View>
 
         <Text style={styles.email}>{user?.email}</Text>
         <Text style={styles.provider}>
-          Signed in with {user?.app_metadata?.provider || 'email'}
+          Student ID: {profile.rollNumber || 'Not Set'}
         </Text>
       </View>
 
-      {/* Profile Details */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>Personal Information</Text>
           <Pressable
             onPress={() => {
-              if (editing) {
-                setEditForm(profile); // Reset form
-              }
+              if (editing) setEditForm(profile);
               setEditing(!editing);
               Haptics.selectionAsync();
             }}
@@ -289,41 +302,31 @@ export default function ProfileScreen() {
             <InfoInput
               label="Full Name"
               value={editForm.fullName}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, fullName: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, fullName: text })}
               placeholder="John Doe"
             />
             <InfoInput
               label="Roll Number"
               value={editForm.rollNumber}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, rollNumber: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, rollNumber: text })}
               placeholder="21BCS001"
             />
             <InfoInput
               label="Course"
               value={editForm.course}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, course: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, course: text })}
               placeholder="B.Tech CSE"
             />
             <InfoInput
               label="Year"
               value={editForm.year}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, year: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, year: text })}
               placeholder="3rd Year"
             />
             <InfoInput
               label="Semester"
               value={editForm.semester}
-              onChangeText={(text) =>
-                setEditForm({ ...editForm, semester: text })
-              }
+              onChangeText={(text) => setEditForm({ ...editForm, semester: text })}
               placeholder="6th Semester"
             />
 
@@ -342,12 +345,11 @@ export default function ProfileScreen() {
         )}
       </View>
 
-      {/* Actions */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Actions</Text>
 
         <Pressable onPress={clearAllData} style={styles.actionBtn}>
-          <Text style={styles.actionBtnText}>🗑️ Clear All Data</Text>
+          <Text style={styles.actionBtnText}>🗑️ Clear App Data</Text>
         </Pressable>
 
         <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
@@ -355,10 +357,8 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
 
-      {/* App Info */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>College Companion v1.0</Text>
-        <Text style={styles.footerText}>Made with ❤️ for students</Text>
       </View>
 
       <View style={{ height: 40 }} />
@@ -366,12 +366,10 @@ export default function ProfileScreen() {
   );
 }
 
-/* ---------- Components ---------- */
-
 const InfoRow = ({ label, value }: { label: string; value: string }) => (
   <View style={styles.infoRow}>
     <Text style={styles.infoLabel}>{label}</Text>
-    <Text style={styles.infoValue}>{value}</Text>
+    <Text style={styles.infoValue}>{value || '-'}</Text>
   </View>
 );
 
@@ -397,8 +395,6 @@ const InfoInput = ({
   </View>
 );
 
-/* ---------- Styles ---------- */
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -421,20 +417,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     marginBottom: 32,
+    lineHeight: 22,
   },
   onboardingForm: {
     marginTop: 16,
+    paddingBottom: 40,
   },
   onboardingBtn: {
     backgroundColor: '#000',
-    padding: 16,
-    borderRadius: 8,
+    padding: 18,
+    borderRadius: 12,
     marginTop: 24,
+    elevation: 2,
   },
   onboardingBtnText: {
     color: '#fff',
     textAlign: 'center',
-    fontWeight: '600',
+    fontWeight: '700',
     fontSize: 18,
   },
   title: {
@@ -445,37 +444,43 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 16,
+    borderColor: '#eee',
+    borderRadius: 16,
+    padding: 20,
     marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
   },
   cardTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     marginBottom: 12,
   },
   avatarContainer: {
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
   },
   avatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#000',
+    backgroundColor: '#111',
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 8,
   },
   avatarText: {
     color: '#fff',
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: '700',
   },
   email: {
@@ -497,9 +502,9 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#f5f5f5',
   },
   infoLabel: {
     fontSize: 14,
@@ -507,31 +512,32 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   infoValue: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
     color: '#000',
   },
   inputGroup: {
-    marginBottom: 12,
+    marginBottom: 16,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 6,
+    marginBottom: 8,
     color: '#333',
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 12,
-    borderRadius: 8,
+    borderColor: '#ddd',
+    padding: 14,
+    borderRadius: 10,
     fontSize: 16,
+    backgroundColor: '#f9f9f9',
   },
   saveBtn: {
     backgroundColor: '#000',
-    padding: 14,
-    borderRadius: 8,
-    marginTop: 8,
+    padding: 16,
+    borderRadius: 10,
+    marginTop: 12,
   },
   saveBtnText: {
     color: '#fff',
@@ -541,10 +547,11 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     borderWidth: 1,
-    borderColor: '#dc2626',
-    padding: 14,
-    borderRadius: 8,
-    marginBottom: 8,
+    borderColor: '#fee2e2',
+    backgroundColor: '#fef2f2',
+    padding: 16,
+    borderRadius: 10,
+    marginBottom: 12,
   },
   actionBtnText: {
     color: '#dc2626',
@@ -553,9 +560,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   signOutBtn: {
-    backgroundColor: '#000',
-    padding: 14,
-    borderRadius: 8,
+    backgroundColor: '#111',
+    padding: 16,
+    borderRadius: 10,
   },
   signOutBtnText: {
     color: '#fff',
@@ -571,6 +578,5 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 12,
     color: '#999',
-    marginBottom: 4,
   },
 });

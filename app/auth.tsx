@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   View, 
   Text, 
@@ -16,7 +16,6 @@ import * as Haptics from 'expo-haptics';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 
-// Handles the redirect back to the app after Google login
 WebBrowser.maybeCompleteAuthSession();
 
 export default function AuthScreen() {
@@ -25,75 +24,101 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [isLogin, setIsLogin] = useState(true);
 
-  // 1. Google Login Function
+  // FIXED: Google Login with correct redirect handling
   const handleGoogleLogin = async () => {
     try {
       setLoading(true);
       Haptics.selectionAsync();
 
-      // Create the correct redirect URL for your device/app
+      // Use the base redirect without /auth/callback path
       const redirectUrl = makeRedirectUri({
-        path: 'auth', // ensure this matches your routing
+        scheme: 'exp',
+        // Don't specify a path - let Expo handle it
       });
+
+      console.log('Redirect URL:', redirectUrl);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: redirectUrl,
-          skipBrowserRedirect: true, // We handle the redirect manually below
+          skipBrowserRedirect: false,
         },
       });
 
       if (error) throw error;
 
       if (data?.url) {
-        // Open the Google Login Page
         const result = await WebBrowser.openAuthSessionAsync(
-            data.url, 
-            redirectUrl
+          data.url, 
+          redirectUrl
         );
 
+        console.log('Browser result type:', result.type);
+
         if (result.type === 'success' && result.url) {
-          // Parse the session data from the URL fragment
-          const { params, errorCode } = getQueryParams(result.url);
+          // Extract tokens from URL
+          const url = result.url;
           
-          if (errorCode) throw new Error(errorCode);
+          // Handle both hash (#) and query (?) parameters
+          let params: URLSearchParams;
           
-          // If we got access_token/refresh_token from the URL, set the session manually
-          if (params.access_token && params.refresh_token) {
-            const { error: sessionError } = await supabase.auth.setSession({
-              access_token: params.access_token,
-              refresh_token: params.refresh_token,
-            });
-            if (sessionError) throw sessionError;
+          if (url.includes('#')) {
+            const hashFragment = url.split('#')[1];
+            params = new URLSearchParams(hashFragment);
+          } else if (url.includes('?')) {
+            const queryString = url.split('?')[1];
+            params = new URLSearchParams(queryString);
+          } else {
+            console.log('No parameters found in URL');
+            throw new Error('No authentication parameters found');
           }
+
+          const access_token = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
+
+          console.log('Tokens found:', { 
+            hasAccess: !!access_token, 
+            hasRefresh: !!refresh_token 
+          });
+
+          if (access_token && refresh_token) {
+            // Set the session in Supabase
+            const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
+
+            if (sessionError) {
+              console.error('Session error:', sessionError);
+              throw sessionError;
+            }
+
+            console.log('Session set successfully:', !!sessionData.session);
+            
+            // Success haptic feedback
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            
+            // Small delay to let the auth state propagate
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } else {
+            throw new Error('No tokens received from Google');
+          }
+        } else if (result.type === 'cancel') {
+          console.log('User cancelled login');
+        } else if (result.type === 'dismiss') {
+          console.log('Browser dismissed');
         }
       }
     } catch (error: any) {
-      // Don't alert if user just cancelled the browser
+      console.error('Google Sign-In Error:', error);
       if (error.message !== 'User cancelled the auth session') {
         Alert.alert('Google Sign-In Error', error.message);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
     } finally {
       setLoading(false);
     }
-  };
-
-  // Helper to extract tokens from the URL after Google redirects back
-  const getQueryParams = (url: string) => {
-    const params: { [key: string]: string } = {};
-    const errorCode = null;
-    
-    // Supabase returns tokens in the hash (#) part of the URL
-    const hashIndex = url.indexOf('#');
-    if (hashIndex !== -1) {
-      const hashParams = url.substring(hashIndex + 1).split('&');
-      hashParams.forEach((param) => {
-        const [key, value] = param.split('=');
-        params[key] = decodeURIComponent(value);
-      });
-    }
-    return { params, errorCode };
   };
 
   async function handleEmailAuth() {
@@ -107,21 +132,32 @@ export default function AuthScreen() {
 
     try {
       if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
+        
         if (error) throw error;
+        
+        console.log('Email sign in successful:', !!data.session);
+        
+        if (data.session) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
       } else {
         const { error } = await supabase.auth.signUp({
           email,
           password,
         });
+        
         if (error) throw error;
+        
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert('Success', 'Check your email to verify your account.');
         setIsLogin(true);
       }
     } catch (error: any) {
+      console.error('Email auth error:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', error.message);
     } finally {
@@ -134,7 +170,10 @@ export default function AuthScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.header}>
           <Text style={styles.title}>College Companion</Text>
           <Text style={styles.subtitle}>
@@ -154,6 +193,7 @@ export default function AuthScreen() {
               onChangeText={setEmail}
               autoCapitalize="none"
               keyboardType="email-address"
+              editable={!loading}
             />
           </View>
 
@@ -166,6 +206,7 @@ export default function AuthScreen() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry
+              editable={!loading}
             />
           </View>
 
@@ -175,7 +216,7 @@ export default function AuthScreen() {
             disabled={loading}
             style={({ pressed }) => [
               styles.button,
-              pressed && { opacity: 0.9 },
+              pressed && !loading && { opacity: 0.9 },
               loading && { opacity: 0.7 }
             ]}
           >
@@ -200,21 +241,26 @@ export default function AuthScreen() {
             disabled={loading}
             style={({ pressed }) => [
               styles.googleButton,
-              pressed && { backgroundColor: '#f1f1f1' }
+              pressed && !loading && { backgroundColor: '#f1f1f1' },
+              loading && { opacity: 0.7 }
             ]}
           >
-            {/* You can replace this Text with a Google Icon/Image if you have one */}
-            <Text style={styles.googleButtonText}>Continue with Google</Text>
+            <Text style={styles.googleButtonText}>
+              {loading ? 'Signing in...' : 'Continue with Google'}
+            </Text>
           </Pressable>
 
           <Pressable 
             onPress={() => {
-              Haptics.selectionAsync();
-              setIsLogin(!isLogin);
+              if (!loading) {
+                Haptics.selectionAsync();
+                setIsLogin(!isLogin);
+              }
             }} 
             style={styles.switchButton}
+            disabled={loading}
           >
-            <Text style={styles.switchText}>
+            <Text style={[styles.switchText, loading && { opacity: 0.5 }]}>
               {isLogin 
                 ? "Don't have an account? Sign Up" 
                 : "Already have an account? Sign In"}
@@ -235,7 +281,14 @@ const styles = StyleSheet.create({
   form: { width: '100%' },
   inputGroup: { marginBottom: 20 },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#ddd', padding: 16, fontSize: 16, borderRadius: 12, backgroundColor: '#f9f9f9' },
+  input: { 
+    borderWidth: 1, 
+    borderColor: '#ddd', 
+    padding: 16, 
+    fontSize: 16, 
+    borderRadius: 12, 
+    backgroundColor: '#f9f9f9' 
+  },
   
   button: {
     backgroundColor: '#000',
@@ -251,7 +304,6 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '700' },
 
-  /* Google Button Styles */
   googleButton: {
     backgroundColor: '#fff',
     borderWidth: 1,

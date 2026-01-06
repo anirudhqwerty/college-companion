@@ -7,10 +7,12 @@ import {
   Alert,
   ScrollView,
   StyleSheet,
+  ActivityIndicator
 } from 'react-native';
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
+import { supabase } from '../../lib/supabase'; // Import Supabase
 
 /* ---------- Types ---------- */
 
@@ -27,8 +29,6 @@ type Subject = {
   components: MarkComponent[];
 };
 
-const STORAGE_KEY = 'marks_subjects';
-
 /* ---------- Screen ---------- */
 
 export default function MarksScreen() {
@@ -43,19 +43,38 @@ export default function MarksScreen() {
   const [compTitle, setCompTitle] = useState('');
   const [obtained, setObtained] = useState('');
   const [total, setTotal] = useState('');
+  
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   /* ---------- Load / Save ---------- */
-
+  
+  // 1. Get User ID
   useEffect(() => {
-    (async () => {
-      const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      if (saved) setSubjects(JSON.parse(saved));
-    })();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) setUserId(user.id);
+    });
   }, []);
 
+  // 2. Load
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(subjects));
-  }, [subjects]);
+    if(!userId) return;
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(`marks_subjects_${userId}`);
+        if (saved) setSubjects(JSON.parse(saved));
+        else setSubjects([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [userId]);
+
+  // 3. Save
+  useEffect(() => {
+    if(!userId || loading) return;
+    AsyncStorage.setItem(`marks_subjects_${userId}`, JSON.stringify(subjects));
+  }, [subjects, userId, loading]);
 
   /* ---------- Helpers ---------- */
 
@@ -153,6 +172,8 @@ export default function MarksScreen() {
   };
 
   /* ---------- UI ---------- */
+
+  if (loading) return <View style={styles.container} />;
 
   return (
     // FIXED: Added backgroundColor: '#fff' here

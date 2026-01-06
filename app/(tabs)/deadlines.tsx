@@ -12,9 +12,7 @@ import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Haptics from 'expo-haptics';
-
-// NOTE: Notifications removed to prevent Expo Go SDK 53 crash on Android.
-// To use notifications, you must create a "Development Build".
+import { supabase } from '../../lib/supabase';
 
 /* ---------- Types ---------- */
 
@@ -24,9 +22,6 @@ type Deadline = {
   subject?: string;
   dueAt: number;
 };
-
-const STORAGE_KEY = 'deadlines';
-const HISTORY_KEY = 'deadlines_history';
 
 /* ---------- Screen ---------- */
 
@@ -45,24 +40,47 @@ export default function DeadlinesScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
 
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
   /* ---------- Load / Save ---------- */
 
+  // 1. Get User
   useEffect(() => {
-    (async () => {
-      const saved = await AsyncStorage.getItem(STORAGE_KEY);
-      const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
-      if (saved) setDeadlines(JSON.parse(saved));
-      if (savedHistory) setHistory(JSON.parse(savedHistory));
-    })();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) setUserId(user.id);
+    });
   }, []);
 
+  // 2. Load
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(deadlines));
-  }, [deadlines]);
+    if(!userId) return;
+
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(`deadlines_${userId}`);
+        const savedHistory = await AsyncStorage.getItem(`deadlines_history_${userId}`);
+        if (saved) setDeadlines(JSON.parse(saved));
+        else setDeadlines([]);
+
+        if (savedHistory) setHistory(JSON.parse(savedHistory));
+        else setHistory([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [userId]);
+
+  // 3. Save
+  useEffect(() => {
+    if(!userId || loading) return;
+    AsyncStorage.setItem(`deadlines_${userId}`, JSON.stringify(deadlines));
+  }, [deadlines, userId, loading]);
 
   useEffect(() => {
-    AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  }, [history]);
+    if(!userId || loading) return;
+    AsyncStorage.setItem(`deadlines_history_${userId}`, JSON.stringify(history));
+  }, [history, userId, loading]);
 
   /* ---------- Actions ---------- */
 
@@ -253,6 +271,8 @@ export default function DeadlinesScreen() {
       {title}
     </Text>
   );
+
+  if (loading) return <View style={{ flex: 1, padding: 16, backgroundColor: '#fff' }} />;
 
   return (
     <View style={{ flex: 1, padding: 16, paddingTop: 60, backgroundColor: '#fff' }}>
