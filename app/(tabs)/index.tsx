@@ -5,6 +5,7 @@ import {
   FlatList,
   TextInput,
   Alert,
+  Modal,
   ViewStyle,
 } from 'react-native';
 import { useState, useEffect } from 'react';
@@ -14,9 +15,7 @@ type Action =
   | 'ATTENDED'
   | 'MISSED'
   | 'ATTENDED_LAB'
-  | 'MISSED_LAB'
-  | 'CLASS_CANCELLED'
-  | 'LAB_CANCELLED';
+  | 'MISSED_LAB';
 
 type Subject = {
   id: string;
@@ -31,6 +30,7 @@ const STORAGE_KEY = 'attendance_subjects';
 export default function AttendanceScreen() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [subjectName, setSubjectName] = useState('');
+  const [menuFor, setMenuFor] = useState<string | null>(null);
 
   /* ---------- Persistence ---------- */
 
@@ -66,23 +66,10 @@ export default function AttendanceScreen() {
     let attended = s.attended;
     let missed = s.missed;
 
-    switch (last) {
-      case 'ATTENDED':
-        attended -= 1;
-        break;
-      case 'MISSED':
-        missed -= 1;
-        break;
-      case 'ATTENDED_LAB':
-        attended -= 2;
-        break;
-      case 'MISSED_LAB':
-        missed -= 2;
-        break;
-      case 'CLASS_CANCELLED':
-      case 'LAB_CANCELLED':
-        break;
-    }
+    if (last === 'ATTENDED') attended -= 1;
+    if (last === 'MISSED') missed -= 1;
+    if (last === 'ATTENDED_LAB') attended -= 2;
+    if (last === 'MISSED_LAB') missed -= 2;
 
     return {
       ...s,
@@ -193,9 +180,22 @@ export default function AttendanceScreen() {
                 borderRadius: 8,
               }}
             >
-              <Text style={{ fontSize: 18, fontWeight: '600' }}>
-                {item.name}
-              </Text>
+              {/* Header */}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 18, fontWeight: '600' }}>
+                  {item.name}
+                </Text>
+
+                <Pressable onPress={() => setMenuFor(item.id)}>
+                  <Text style={{ fontSize: 22 }}>⋮</Text>
+                </Pressable>
+              </View>
 
               <Text>
                 Attended: {item.attended} | Missed: {item.missed}
@@ -208,95 +208,75 @@ export default function AttendanceScreen() {
               <Text>Skip {skip75} classes (75%)</Text>
               <Text>Skip {skip50} classes (50%)</Text>
 
-              {/* Buttons */}
-              <View style={{ marginTop: 10 }}>
-                <Row>
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s => push(s, 'ATTENDED', 1))
-                    }
-                    style={btn('#16a34a')}
+              {/* 3-dot menu */}
+              <Modal
+                transparent
+                visible={menuFor === item.id}
+                animationType="fade"
+              >
+                <Pressable
+                  style={{
+                    flex: 1,
+                    backgroundColor: 'rgba(0,0,0,0.3)',
+                    justifyContent: 'center',
+                    padding: 32,
+                  }}
+                  onPress={() => setMenuFor(null)}
+                >
+                  <View
+                    style={{
+                      backgroundColor: '#fff',
+                      borderRadius: 8,
+                      padding: 12,
+                    }}
                   >
-                    <Text style={{ color: '#16a34a' }}>+ Attended</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s => push(s, 'MISSED', 0, 1))
-                    }
-                    style={btn('#dc2626')}
-                  >
-                    <Text style={{ color: '#dc2626' }}>+ Missed</Text>
-                  </Pressable>
-                </Row>
-
-                <Row>
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s =>
-                        push(s, 'ATTENDED_LAB', 2)
-                      )
-                    }
-                    style={btn('#2563eb')}
-                  >
-                    <Text style={{ color: '#2563eb' }}>+ Attended Lab</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s =>
-                        push(s, 'MISSED_LAB', 0, 2)
-                      )
-                    }
-                    style={btn('#7c2d12')}
-                  >
-                    <Text style={{ color: '#7c2d12' }}>+ Missed Lab</Text>
-                  </Pressable>
-                </Row>
-
-                <Row>
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s =>
-                        push(s, 'CLASS_CANCELLED')
-                      )
-                    }
-                    style={btn('#6b7280')}
-                  >
-                    <Text>Class Cancelled</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s =>
-                        push(s, 'LAB_CANCELLED')
-                      )
-                    }
-                    style={btn('#6b7280')}
-                  >
-                    <Text>Lab Cancelled</Text>
-                  </Pressable>
-                </Row>
-
-                <Row>
-                  <Pressable
-                    onPress={() =>
-                      updateSubject(item.id, s => pop(s))
-                    }
-                    disabled={item.history.length === 0}
-                    style={btn('#000')}
-                  >
-                    <Text>Undo</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => removeSubject(item.id)}
-                    style={btn('#dc2626')}
-                  >
-                    <Text style={{ color: '#dc2626' }}>Delete</Text>
-                  </Pressable>
-                </Row>
-              </View>
+                    <MenuItem
+                      label="Attended class"
+                      onPress={() =>
+                        updateSubject(item.id, s =>
+                          push(s, 'ATTENDED', 1)
+                        )
+                      }
+                    />
+                    <MenuItem
+                      label="Missed class"
+                      onPress={() =>
+                        updateSubject(item.id, s =>
+                          push(s, 'MISSED', 0, 1)
+                        )
+                      }
+                    />
+                    <MenuItem
+                      label="Attended lab"
+                      onPress={() =>
+                        updateSubject(item.id, s =>
+                          push(s, 'ATTENDED_LAB', 2)
+                        )
+                      }
+                    />
+                    <MenuItem
+                      label="Missed lab"
+                      onPress={() =>
+                        updateSubject(item.id, s =>
+                          push(s, 'MISSED_LAB', 0, 2)
+                        )
+                      }
+                    />
+                    <MenuItem
+                      label="Undo"
+                      disabled={item.history.length === 0}
+                      onPress={() =>
+                        updateSubject(item.id, s => pop(s))
+                      }
+                    />
+                    <MenuItem
+                      label="Delete subject"
+                      danger
+                      onPress={() => removeSubject(item.id)}
+                    />
+                  </View>
+                </Pressable>
+              </Modal>
             </View>
           );
         }}
@@ -305,18 +285,42 @@ export default function AttendanceScreen() {
   );
 }
 
-/* ---------- Small helpers ---------- */
+/* ---------- Small components ---------- */
 
-const Row = ({ children }: { children: any }) => (
-  <View style={{ flexDirection: 'row', marginBottom: 6 }}>{children}</View>
+const MenuItem = ({
+  label,
+  onPress,
+  danger,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) => (
+  <Pressable
+    onPress={onPress}
+    disabled={disabled}
+    style={{
+      paddingVertical: 10,
+      opacity: disabled ? 0.4 : 1,
+    }}
+  >
+    <Text
+      style={{
+        fontSize: 16,
+        color: danger ? '#dc2626' : '#000',
+      }}
+    >
+      {label}
+    </Text>
+  </Pressable>
 );
 
 const btn = (color: string): ViewStyle => ({
-  flex: 1,
-  padding: 10,
+  paddingHorizontal: 16,
+  justifyContent: 'center',
   borderWidth: 1,
   borderColor: color,
   borderRadius: 6,
-  marginRight: 6,
-  alignItems: 'center',
 });
